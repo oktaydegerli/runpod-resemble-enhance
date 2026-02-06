@@ -32,20 +32,22 @@ def handler(job):
         audio_buffer = io.BytesIO(audio_bytes)
         
         # 2. SES OKUMA (DÜZELTME BURADA)
-        # Torchaudio yerine Soundfile kullanıyoruz.
-        # Soundfile veriyi (Zaman, Kanal) formatında numpy array olarak döndürür.
         data, sr = sf.read(audio_buffer)
-        
-        # Numpy array'i PyTorch Tensor'a çeviriyoruz
         waveform = torch.from_numpy(data).float()
         
-        # Resemble Enhance (Kanal, Zaman) formatı bekler.
-        # Eğer ses Mono ise (Zaman,) -> (1, Zaman) yapmalıyız.
-        # Eğer ses Stereo ise (Zaman, Kanal) -> (Kanal, Zaman) yapmalıyız.
-        if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0) # Mono düzeltme
-        else:
-            waveform = waveform.t() # Stereo düzeltme (Transpose)
+        # Soundfile kütüphanesi çıktıları şöyledir:
+        # Mono ses: (Zaman,) -> 1 Boyutlu
+        # Stereo ses: (Zaman, KanalSayısı) -> 2 Boyutlu
+        
+        # HATA ÇÖZÜMÜ:
+        # Resemble Enhance SADECE 1D (Mono) istiyor.
+        # Eğer veri 2D ise (yani Stereo ise veya yanlış boyutluysa), Mono'ya çeviriyoruz.
+        if waveform.dim() > 1:
+            # Kanalların ortalamasını alarak Mono yapıyoruz
+            # (Time, Channels) olduğu için dim=1'i sıkıştırıyoruz.
+            waveform = waveform.mean(dim=1)
+            
+        # ŞU AN: waveform değişkeni kesinlikle 1D (sadece [Zaman]) formatında.
             
         # 3. Enhance işlemi
         model = get_enhancer()
@@ -61,9 +63,10 @@ def handler(job):
         )
 
         # 4. Sonucu kaydetme
-        # Çıktı için torchaudio.save kullanabiliriz, o sorunsuzdur.
         output_buffer = io.BytesIO()
-        torchaudio.save(output_buffer, enhanced_wav.cpu(), new_sr, format="wav")
+        # Kaydederken (Kanal, Zaman) formatı genelde daha iyidir, o yüzden unsqueeze yapıyoruz
+        # ama torchaudio 1D de kabul eder. Garanti olsun diye 1D gönderiyoruz.
+        torchaudio.save(output_buffer, enhanced_wav.cpu().unsqueeze(0), new_sr, format="wav")
         output_buffer.seek(0)
         
         output_base64 = base64.b64encode(output_buffer.read()).decode('utf-8')
