@@ -12,6 +12,7 @@ from resemble_enhance.enhancer.inference import enhance, load_enhancer
 device = "cuda" if torch.cuda.is_available() else "cpu"
 run_dir = None # Varsayılan indirme konumu
 
+
 print(f"Model yükleniyor... Device: {device}")
 # İlk çalıştırmada modeli belleğe alıyoruz
 enhancer = None
