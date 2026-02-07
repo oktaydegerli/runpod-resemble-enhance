@@ -7,18 +7,15 @@ WORKDIR /
 # Build sırasında etkileşimi kapatmak için
 ARG DEBIAN_FRONTEND=noninteractive
 
-# HF_TOKEN'ı hem build argument hem de environment variable olarak al
+# Huggingface token zorunlu (pocket-tts'in voice-clone'lu modeli için)
 ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
 
-# HF_TOKEN kontrolü - yoksa build başarısız olsun
+# HF_TOKEN kontrolü
 RUN if [ -z "$HF_TOKEN" ]; then \
         echo ""; \
-        echo "❌❌❌ HATA: HF_TOKEN bulunamadı! ❌❌❌"; \
+        echo "❌❌❌ HATA: HF_TOKEN build argument'i eksik! ❌❌❌"; \
         echo ""; \
-        echo "RunPod'da Environment Variables bölümünden ekleyin:"; \
-        echo "Key: HF_TOKEN"; \
-        echo "Value: hf_xxxxxxxxxx"; \
+        echo "Build komutu: docker build --build-arg HF_TOKEN=hf_xxx ."; \
         echo ""; \
         exit 1; \
     fi
@@ -51,9 +48,10 @@ RUN python -m venv /root/venv_pocket && \
 COPY handler.py api_enhance.py api_pocket.py /
 
 # 6. MODELLERİ ÖNCEDEN İNDİR (Cold Start Optimizasyonu)
-RUN /root/venv_resemble/bin/python -c "from resemble_enhance.enhancer.inference import load_enhancer; load_enhancer(None, 'cpu')" && \
+# Bu adım, imajı oluştururken modelleri indirir, böylece çalışma anında internete ihtiyaç duymaz.
+RUN HF_TOKEN=$HF_TOKEN /root/venv_resemble/bin/python -c "from resemble_enhance.enhancer.inference import load_enhancer; load_enhancer(None, 'cpu')" && \
     echo "✅ Resemble-Enhance modeli indirildi" && \
-    /root/venv_pocket/bin/python -c "from pocket_tts import TTSModel; TTSModel.load_model()" && \
+    HF_TOKEN=$HF_TOKEN /root/venv_pocket/bin/python -c "from pocket_tts import TTSModel; TTSModel.load_model()" && \
     echo "✅ Pocket-TTS voice cloning modeli indirildi"
 
 # Model indirildikten sonra offline modu aktif et
