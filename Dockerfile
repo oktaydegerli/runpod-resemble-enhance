@@ -1,5 +1,5 @@
 # Temel imaj olarak CUDA destekli bir PyTorch imajı kullanıyoruz
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 WORKDIR /
 
@@ -25,8 +25,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /tmp/*
 
 # 2. Ana Python Ortamı - cache temizle
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir runpod requests
+RUN python -m pip install --upgrade pip && \
+    python -m pip install --no-cache-dir runpod requests
 
 # 3. Resemble-Enhance Sanal Ortamı
 RUN python -m venv /root/venv_resemble && \
@@ -48,7 +48,7 @@ RUN HF_TOKEN=$HF_TOKEN /root/venv_resemble/bin/python -c "from resemble_enhance.
     echo "✅ Pocket-TTS voice cloning modeli indirildi" && \
     /root/venv_pocket/bin/pip cache purge && \
     /root/venv_resemble/bin/pip cache purge && \
-    pip cache purge && \
+    python -m pip cache purge && \
     rm -rf /tmp/* && \
     rm -rf /root/.cache/pip
 
