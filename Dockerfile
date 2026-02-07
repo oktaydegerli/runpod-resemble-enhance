@@ -1,26 +1,45 @@
+# Temel imaj olarak CUDA destekli bir PyTorch imajı kullanıyoruz
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+# Çalışma dizinini belirle
+WORKDIR /
 
-# Sistem paketleri
-RUN apt-get update && \
-    apt-get install -y git git-lfs ffmpeg libsndfile1 && \
-    git lfs install && \
-    rm -rf /var/lib/apt/lists/*
+# Build sırasında etkileşimi kapatmak için
+ARG DEBIAN_FRONTEND=noninteractive
 
-# ÖNCE PIP'i GÜNCELLİYORUZ (Çözümleme sorunlarını giderir)
-RUN python3 -m pip install --upgrade pip
+# 1. Sistem Bağımlılıklarını Kur
+RUN apt-get update && apt-get install -y \
+    git \
+    git-lfs \
+    ffmpeg \
+    libsndfile1 \
+    psmisc \
+    && git lfs install \
+    && rm -rf /var/lib/apt/lists/*
 
-# ADIM ADIM YÜKLEME (Döngüyü kırmak için)
-# Önce sorun çıkaran 'typer' ve diğer temel paketleri kuruyoruz
-RUN pip install --no-cache-dir "typer>=0.9.0" runpod soundfile
+# 2. Ana Python Ortamı İçin Temel Paketleri Kur
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir runpod requests
 
-# Sonra resemble-enhance'i kuruyoruz
-RUN pip install --no-cache-dir resemble-enhance
+# 3. Resemble-Enhance Sanal Ortamını Hazırla
+RUN python -m venv /root/venv_resemble && \
+    /root/venv_resemble/bin/pip install --upgrade pip && \
+    /root/venv_resemble/bin/pip install fastapi uvicorn resemble-enhance
 
-# Modelleri indirme
-RUN python3 -c "from resemble_enhance.enhancer.inference import download; download()"
+# 4. Pocket-TTS Sanal Ortamını Hazırla
+RUN python -m venv /root/venv_pocket && \
+    /root/venv_pocket/bin/pip install --upgrade pip && \
+    /root/venv_pocket/bin/pip install fastapi uvicorn git+https://github.com/kyutai-labs/pocket-tts
 
-COPY handler.py /handler.py
+# 5. Dosyaları İmajın İçine Kopyala
+# (handler.py, api_enhance.py, api_pocket.py dosyalarının Dockerfile ile aynı klasörde olduğunu varsayıyoruz)
+COPY handler.py api_enhance.py api_pocket.py /
 
-CMD [ "python", "-u", "/handler.py" ]
+# 6. MODELLERİ ÖNCEDEN İNDİR (Cold Start Optimizasyonu)
+# Bu adım, imajı oluştururken modelleri indirir, böylece çalışma anında internete ihtiyaç duymaz.
+RUN /root/venv_resemble/bin/python -c "from resemble_enhance.enhancer.inference import load_enhancer; load_enhancer(None, 'cpu')" && \
+    /root/venv_pocket/bin/python -c "from pocket_tts import TTSModel; TTSModel.load_model()"
+
+# 7. Başlatma Komutu
+# -u flag'i logların anlık olarak RunPod panelinde görünmesini sağlar
+CMD ["python", "-u", "/handler.py"]

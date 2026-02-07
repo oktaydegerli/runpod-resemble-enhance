@@ -1,83 +1,119 @@
 import runpod
-import torch
-import torchaudio
+import subprocess
+import requests
+import time
 import base64
-import io
-import soundfile as sf  # Soundfile kütüphanesini kullanacağız
-from resemble_enhance.enhancer.inference import enhance, load_enhancer
+import os
+import uuid
+import signal
 
-# Cihaz seçimi
-device = "cuda" if torch.cuda.is_available() else "cpu"
-run_dir = None 
+# --- AYARLAR VE YOLLAR ---
+RESEMBLE_PYTHON = "/root/venv_resemble/bin/python"
+POCKET_PYTHON = "/root/venv_pocket/bin/python"
+RESEMBLE_PORT = 8011
+POCKET_PORT = 8012
 
-print(f"Model yükleniyor... Device: {device}")
-enhancer = None
+def kill_process_on_port(port):
+    """Portu işgal eden süreci temizler."""
+    try:
+        # fuser komutu portu kullanan süreci kapatır (psmisc paketi gereklidir)
+        subprocess.run(["fuser", "-k", f"{port}/tcp"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    except Exception:
+        pass
 
-def get_enhancer():
-    global enhancer
-    if enhancer is None:
-        enhancer = load_enhancer(run_dir, device)
-    return enhancer
+def wait_for_services():
+    """Modeller belleğe yüklenip API'ler hazır olana kadar bekler."""
+    start_time = time.time()
+    services = {
+        "Resemble Enhance": f"http://127.0.0.1:{RESEMBLE_PORT}/docs",
+        "Pocket-TTS": f"http://127.0.0.1:{POCKET_PORT}/docs"
+    }
+    
+    for name, url in services.items():
+        ready = False
+        while not ready:
+            try:
+                response = requests.get(url, timeout=1)
+                if response.status_code == 200:
+                    ready = True
+                    print(f"✅ {name} hazır! ({time.time() - start_time:.2f}s)")
+            except requests.exceptions.ConnectionError:
+                if time.time() - start_time > 120:
+                    raise Exception(f"❌ {name} yükleme zaman aşımı!")
+                time.sleep(0.5)
+
+def start_backend_services():
+    """Eski süreçleri öldürür ve yeni API servislerini başlatır."""
+    print("🧹 Portlar temizleniyor...")
+    kill_process_on_port(RESEMBLE_PORT)
+    kill_process_on_port(POCKET_PORT)
+    time.sleep(1)
+
+    print(f"🛠️ Servisler başlatılıyor (Portlar: {RESEMBLE_PORT}, {POCKET_PORT})...")
+    # api_enhance.py ve api_pocket.py dosyalarının aynı dizinde olduğu varsayılır
+    subprocess.Popen([RESEMBLE_PYTHON, "api_enhance.py"])
+    subprocess.Popen([POCKET_PYTHON, "api_pocket.py"])
+    
+    wait_for_services()
 
 def handler(job):
-    job_input = job["input"]
-    audio_base64 = job_input.get("audio_base64")
+    """RunPod ana işlem fonksiyonu"""
+    job_input = job['input']
     
+    # Parametreleri al
+    audio_base64 = job_input.get("audio_base64")
+    nfe = job_input.get("nfe", 64)
+    solver = job_input.get("solver", "midpoint")
+    lambd = job_input.get("lambd", 0.5)
+    tau = job_input.get("tau", 0.5)
+    return_enhanced = job_input.get("return_enhanced_audio", False)
+
     if not audio_base64:
-        return {"error": "Lutfen 'audio_base64' parametresini gonderin."}
+        return {"error": "audio_base64 zorunludur."}
+
+    # UUID ile çakışmaları önle
+    req_id = str(uuid.uuid4())
+    in_wav = f"/tmp/in_{req_id}.wav"
+    enh_wav = f"/tmp/enh_{req_id}.wav"
+    out_safetensors = f"/tmp/out_{req_id}.safetensors"
 
     try:
-        # 1. Base64 çözme
-        audio_bytes = base64.b64decode(audio_base64)
-        audio_buffer = io.BytesIO(audio_bytes)
-        
-        # 2. SES OKUMA (DÜZELTME BURADA)
-        data, sr = sf.read(audio_buffer)
-        waveform = torch.from_numpy(data).float()
-        
-        # Soundfile kütüphanesi çıktıları şöyledir:
-        # Mono ses: (Zaman,) -> 1 Boyutlu
-        # Stereo ses: (Zaman, KanalSayısı) -> 2 Boyutlu
-        
-        # HATA ÇÖZÜMÜ:
-        # Resemble Enhance SADECE 1D (Mono) istiyor.
-        # Eğer veri 2D ise (yani Stereo ise veya yanlış boyutluysa), Mono'ya çeviriyoruz.
-        if waveform.dim() > 1:
-            # Kanalların ortalamasını alarak Mono yapıyoruz
-            # (Time, Channels) olduğu için dim=1'i sıkıştırıyoruz.
-            waveform = waveform.mean(dim=1)
-            
-        # ŞU AN: waveform değişkeni kesinlikle 1D (sadece [Zaman]) formatında.
-            
-        # 3. Enhance işlemi
-        model = get_enhancer()
-        
-        enhanced_wav, new_sr = enhance(
-            waveform, 
-            sr, 
-            device, 
-            nfe=64, 
-            solver="midpoint", 
-            lambd=0.5, 
-            tau=0.5
-        )
+        # 1. Base64'ten Dosyaya
+        with open(in_wav, "wb") as f:
+            f.write(base64.b64decode(audio_base64))
 
-        # 4. Sonucu kaydetme
-        output_buffer = io.BytesIO()
-        # Kaydederken (Kanal, Zaman) formatı genelde daha iyidir, o yüzden unsqueeze yapıyoruz
-        # ama torchaudio 1D de kabul eder. Garanti olsun diye 1D gönderiyoruz.
-        torchaudio.save(output_buffer, enhanced_wav.cpu().unsqueeze(0), new_sr, format="wav")
-        output_buffer.seek(0)
+        # 2. Resemble Enhance API Çağrısı
+        res1 = requests.post(f"http://127.0.0.1:{RESEMBLE_PORT}/process", json={
+            "input_path": in_wav, "output_path": enh_wav,
+            "nfe": nfe, "solver": solver, "lambd": lambd, "tau": tau
+        })
+        if res1.status_code != 200: return {"error": f"Enhance Hatası: {res1.text}"}
+
+        # 3. Pocket-TTS API Çağrısı
+        res2 = requests.post(f"http://127.0.0.1:{POCKET_PORT}/process", json={
+            "input_path": enh_wav, "output_path": out_safetensors
+        })
+        if res2.status_code != 200: return {"error": f"Pocket Hatası: {res2.text}"}
+
+        # 4. Sonuçları Hazırla
+        response = {"status": "success"}
+        with open(out_safetensors, "rb") as f:
+            response["prompt_base64"] = base64.b64encode(f.read()).decode('utf-8')
         
-        output_base64 = base64.b64encode(output_buffer.read()).decode('utf-8')
-        
-        return {
-            "enhanced_audio": output_base64,
-            "sample_rate": new_sr
-        }
+        if return_enhanced:
+            with open(enh_wav, "rb") as f:
+                response["enhanced_audio_base64"] = base64.b64encode(f.read()).decode('utf-8')
+
+        return response
 
     except Exception as e:
-        import traceback
-        return {"error": str(e), "trace": traceback.format_exc()}
+        return {"error": str(e)}
+    finally:
+        # Geçici dosyaları temizle
+        for f in [in_wav, enh_wav, out_safetensors]:
+            if os.path.exists(f): os.remove(f)
 
-runpod.serverless.start({"handler": handler})
+# RunPod Serverless Modu
+if __name__ == "__main__":
+    start_backend_services()
+    runpod.serverless.start({"handler": handler})
