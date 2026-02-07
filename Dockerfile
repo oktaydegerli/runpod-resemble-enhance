@@ -1,17 +1,24 @@
+# Temel imaj olarak CUDA destekli bir PyTorch imajı kullanıyoruz
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
+# Çalışma dizinini belirle
 WORKDIR /
 
 # Build sırasında etkileşimi kapatmak için
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Huggingface token zorunlu (pocket-tts'in voice-clone'lu modeli için)
+# HF_TOKEN'ı hem build argument hem de environment variable olarak al
 ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
 
-# HF_TOKEN kontrolü
+# HF_TOKEN kontrolü - yoksa build başarısız olsun
 RUN if [ -z "$HF_TOKEN" ]; then \
         echo ""; \
-        echo "Hata: Voice cloning için HuggingFace token gereklidir."; \
+        echo "❌❌❌ HATA: HF_TOKEN bulunamadı! ❌❌❌"; \
+        echo ""; \
+        echo "RunPod'da Environment Variables bölümünden ekleyin:"; \
+        echo "Key: HF_TOKEN"; \
+        echo "Value: hf_xxxxxxxxxx"; \
         echo ""; \
         exit 1; \
     fi
@@ -44,10 +51,9 @@ RUN python -m venv /root/venv_pocket && \
 COPY handler.py api_enhance.py api_pocket.py /
 
 # 6. MODELLERİ ÖNCEDEN İNDİR (Cold Start Optimizasyonu)
-# Bu adım, imajı oluştururken modelleri indirir, böylece çalışma anında internete ihtiyaç duymaz.
-RUN HF_TOKEN=$HF_TOKEN /root/venv_resemble/bin/python -c "from resemble_enhance.enhancer.inference import load_enhancer; load_enhancer(None, 'cpu')" && \
+RUN /root/venv_resemble/bin/python -c "from resemble_enhance.enhancer.inference import load_enhancer; load_enhancer(None, 'cpu')" && \
     echo "✅ Resemble-Enhance modeli indirildi" && \
-    HF_TOKEN=$HF_TOKEN /root/venv_pocket/bin/python -c "from pocket_tts import TTSModel; TTSModel.load_model()" && \
+    /root/venv_pocket/bin/python -c "from pocket_tts import TTSModel; TTSModel.load_model()" && \
     echo "✅ Pocket-TTS voice cloning modeli indirildi"
 
 # Model indirildikten sonra offline modu aktif et
