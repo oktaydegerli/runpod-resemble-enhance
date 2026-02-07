@@ -1,26 +1,18 @@
 # Temel imaj olarak CUDA destekli bir PyTorch imajı kullanıyoruz
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
-# Çalışma dizinini belirle
 WORKDIR /
 
-# Build sırasında etkileşimi kapatmak için
 ARG DEBIAN_FRONTEND=noninteractive
-
-# Huggingface token zorunlu (pocket-tts'in voice-clone'lu modeli için)
 ARG HF_TOKEN
 
 # HF_TOKEN kontrolü
 RUN if [ -z "$HF_TOKEN" ]; then \
-        echo ""; \
-        echo "❌❌❌ HATA: HF_TOKEN build argument'i eksik! ❌❌❌"; \
-        echo ""; \
-        echo "Build komutu: docker build --build-arg HF_TOKEN=hf_xxx ."; \
-        echo ""; \
+        echo "❌ HATA: HF_TOKEN build argument'i eksik!"; \
         exit 1; \
     fi
 
-# 1. Sistem Bağımlılıklarını Kur
+# 1. Sistem Bağımlılıklarını Kur ve HEMEN temizle
 RUN apt-get update && apt-get install -y \
     git \
     git-lfs \
@@ -28,35 +20,38 @@ RUN apt-get update && apt-get install -y \
     libsndfile1 \
     psmisc \
     && git lfs install \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/*
 
-# 2. Ana Python Ortamı İçin Temel Paketleri Kur
+# 2. Ana Python Ortamı - cache temizle
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir runpod requests
 
-# 3. Resemble-Enhance Sanal Ortamını Hazırla
+# 3. Resemble-Enhance Sanal Ortamı
 RUN python -m venv /root/venv_resemble && \
     /root/venv_resemble/bin/pip install --upgrade pip && \
-    /root/venv_resemble/bin/pip install fastapi uvicorn resemble-enhance
+    /root/venv_resemble/bin/pip install --no-cache-dir fastapi uvicorn resemble-enhance
 
-# 4. Pocket-TTS Sanal Ortamını Hazırla
+# 4. Pocket-TTS Sanal Ortamı
 RUN python -m venv /root/venv_pocket && \
     /root/venv_pocket/bin/pip install --upgrade pip && \
-    /root/venv_pocket/bin/pip install fastapi uvicorn git+https://github.com/kyutai-labs/pocket-tts
+    /root/venv_pocket/bin/pip install --no-cache-dir fastapi uvicorn git+https://github.com/kyutai-labs/pocket-tts
 
-# 5. Dosyaları İmajın İçine Kopyala
+# 5. Dosyaları kopyala
 COPY handler.py api_enhance.py api_pocket.py /
 
-# 6. MODELLERİ ÖNCEDEN İNDİR (Cold Start Optimizasyonu)
-# Bu adım, imajı oluştururken modelleri indirir, böylece çalışma anında internete ihtiyaç duymaz.
+# 6. Modelleri indir VE pip cache'i temizle
 RUN HF_TOKEN=$HF_TOKEN /root/venv_resemble/bin/python -c "from resemble_enhance.enhancer.inference import load_enhancer; load_enhancer(None, 'cpu')" && \
     echo "✅ Resemble-Enhance modeli indirildi" && \
     HF_TOKEN=$HF_TOKEN /root/venv_pocket/bin/python -c "from pocket_tts import TTSModel; TTSModel.load_model()" && \
-    echo "✅ Pocket-TTS voice cloning modeli indirildi"
+    echo "✅ Pocket-TTS voice cloning modeli indirildi" && \
+    /root/venv_pocket/bin/pip cache purge && \
+    /root/venv_resemble/bin/pip cache purge && \
+    pip cache purge && \
+    rm -rf /tmp/* && \
+    rm -rf /root/.cache/pip
 
-# Model indirildikten sonra offline modu aktif et
 ENV HF_HUB_OFFLINE=1
 
-# 7. Başlatma Komutu
-# -u flag'i logların anlık olarak RunPod panelinde görünmesini sağlar
 CMD ["python", "-u", "/handler.py"]
