@@ -13,14 +13,6 @@ POCKET_PYTHON = "/root/venv_pocket/bin/python"
 RESEMBLE_PORT = 8011
 POCKET_PORT = 8012
 
-def kill_process_on_port(port):
-    """Portu işgal eden süreci temizler."""
-    try:
-        # fuser komutu portu kullanan süreci kapatır (psmisc paketi gereklidir)
-        subprocess.run(["fuser", "-k", f"{port}/tcp"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-    except Exception:
-        pass
-
 def wait_for_services():
     """Modeller belleğe yüklenip API'ler hazır olana kadar bekler."""
     start_time = time.time()
@@ -43,12 +35,6 @@ def wait_for_services():
                 time.sleep(0.5)
 
 def start_backend_services():
-    """Eski süreçleri öldürür ve yeni API servislerini başlatır."""
-    print("🧹 Portlar temizleniyor...")
-    kill_process_on_port(RESEMBLE_PORT)
-    kill_process_on_port(POCKET_PORT)
-    time.sleep(1)
-
     print(f"🛠️ Servisler başlatılıyor (Portlar: {RESEMBLE_PORT}, {POCKET_PORT})...")
     # api_enhance.py ve api_pocket.py dosyalarının aynı dizinde olduğu varsayılır
     subprocess.Popen([RESEMBLE_PYTHON, "api_enhance.py"])
