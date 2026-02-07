@@ -4,13 +4,27 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:  # Manuel tetikleme için
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     
     steps:
+      - name: Maximize build space
+        run: |
+          echo "Disk kullanımı öncesi:"
+          df -h
+          
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          
+          echo "Disk kullanımı sonrası:"
+          df -h
+      
       - name: Checkout code
         uses: actions/checkout@v4
       
@@ -27,7 +41,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/pocket-enhanced
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/yourimage
           tags: |
             type=raw,value=latest
             type=sha,prefix={{branch}}-
@@ -41,8 +55,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             HF_TOKEN=${{ secrets.HF_TOKEN }}
-          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/pocket-enhanced:buildcache
-          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/pocket-enhanced:buildcache,mode=max
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/yourimage:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/yourimage:buildcache,mode=max
       
       - name: Image digest
         run: echo ${{ steps.meta.outputs.tags }}
