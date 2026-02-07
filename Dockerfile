@@ -1,5 +1,5 @@
 # Temel imaj olarak CUDA destekli bir PyTorch imajı kullanıyoruz
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 WORKDIR /
 
